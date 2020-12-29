@@ -13,7 +13,7 @@ import {EngravingRules} from "./EngravingRules";
 import {PointF2D} from "../../Common/DataObjects/PointF2D";
 import {GraphicalStaffEntry} from "./GraphicalStaffEntry";
 import {SystemLinesEnum} from "./SystemLinesEnum";
-import Dictionary from "typescript-collections/dist/lib/Dictionary";
+import { Dictionary } from "typescript-collections";
 import {GraphicalComment} from "./GraphicalComment";
 import {GraphicalMarkedArea} from "./GraphicalMarkedArea";
 import {SystemLine} from "./SystemLine";
@@ -289,19 +289,20 @@ export abstract class MusicSystem extends GraphicalObject {
      */
     public createMusicSystemLabel(  instrumentLabelTextHeight: number, systemLabelsRightMargin: number,
                                     labelMarginBorderFactor: number, isFirstSystem: boolean = false): void {
+
+        const originalSystemLabelsRightMargin: number = systemLabelsRightMargin;
         for (let idx: number = 0, len: number = this.staffLines.length; idx < len; ++idx) {
             const instrument: Instrument = this.staffLines[idx].ParentStaff.ParentInstrument;
             let instrNameLabel: Label;
             if (isFirstSystem) {
                 instrNameLabel = instrument.NameLabel;
-                if (!this.rules.RenderPartNames) {
+                if (!this.rules.RenderPartNames || !instrNameLabel?.print) {
                     instrNameLabel = new Label("", instrument.NameLabel.textAlignment, instrument.NameLabel.font);
                     systemLabelsRightMargin = 0; // might affect lyricist/tempo placement. but without this there's still some extra x-spacing.
                 }
             } else {
-                if (!this.rules.RenderPartAbbreviations
-                    // don't render part abbreviations if there's only one instrument/part (could be an option in the future)
-                    || this.staffLines.length === 1
+                if (!this.rules.RenderPartAbbreviations || !this.rules.RenderPartNames // don't render abbreviations if we don't render part names
+                    || this.staffLines.length === 1 // don't render part abbreviations if there's only one instrument/part (could be an option in the future)
                     || !instrument.PartAbbreviation
                     || instrument.PartAbbreviation === "") {
                     return;
@@ -310,14 +311,18 @@ export abstract class MusicSystem extends GraphicalObject {
                 // const labelText: string = instrument.NameLabel.text[0] + ".";
                 instrNameLabel = new Label(labelText, instrument.NameLabel.textAlignment, instrument.NameLabel.font);
             }
-            const graphicalLabel: GraphicalLabel = new GraphicalLabel(
-                instrNameLabel, instrumentLabelTextHeight, TextAlignmentEnum.LeftCenter, this.rules, this.boundingBox
-            );
-            graphicalLabel.setLabelPositionAndShapeBorders();
-            this.labels.setValue(instrument, graphicalLabel);
-            // X-Position will be 0 (Label starts at the same PointF_2D with MusicSystem)
-            // Y-Position will be calculated after the y-Spacing
-            // graphicalLabel.PositionAndShape.RelativePosition = new PointF2D(0.0, 0.0);
+            if (instrument?.NameLabel?.print) {
+                const graphicalLabel: GraphicalLabel = new GraphicalLabel(
+                    instrNameLabel, instrumentLabelTextHeight, TextAlignmentEnum.LeftCenter, this.rules, this.boundingBox
+                );
+                graphicalLabel.setLabelPositionAndShapeBorders();
+                this.labels.setValue(instrument, graphicalLabel);
+                // X-Position will be 0 (Label starts at the same PointF_2D with MusicSystem)
+                // Y-Position will be calculated after the y-Spacing
+                // graphicalLabel.PositionAndShape.RelativePosition = new PointF2D(0.0, 0.0);
+            } else {
+                systemLabelsRightMargin = 0;
+            }
         }
 
         // calculate maxLabelLength (needed for X-Spacing)
@@ -325,8 +330,12 @@ export abstract class MusicSystem extends GraphicalObject {
         const labels: GraphicalLabel[] = this.labels.values();
         for (let idx: number = 0, len: number = labels.length; idx < len; ++idx) {
             const label: GraphicalLabel = labels[idx];
+            if (!label.Label.print) {
+                continue;
+            }
             if (label.PositionAndShape.Size.width > this.maxLabelLength) {
                 this.maxLabelLength = label.PositionAndShape.Size.width;
+                systemLabelsRightMargin = originalSystemLabelsRightMargin;
             }
         }
         this.updateMusicSystemStaffLineXPosition(systemLabelsRightMargin);

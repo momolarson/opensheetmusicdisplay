@@ -29,12 +29,13 @@ import {Voice} from "../../VoiceData/Voice";
 import {LinkedVoice} from "../../VoiceData/LinkedVoice";
 import {EngravingRules} from "../EngravingRules";
 import {OrnamentContainer} from "../../VoiceData/OrnamentContainer";
-import {TechnicalInstruction, TechnicalInstructionType} from "../../VoiceData/Instructions/TechnicalInstruction";
+import {TechnicalInstruction} from "../../VoiceData/Instructions/TechnicalInstruction";
 import {PlacementEnum} from "../../VoiceData/Expressions/AbstractExpression";
 import {VexFlowGraphicalNote} from "./VexFlowGraphicalNote";
 import {AutoBeamOptions} from "../../../OpenSheetMusicDisplay/OSMDOptions";
-import {NoteType, Arpeggio} from "../../VoiceData";
 import {SkyBottomLineCalculator} from "../SkyBottomLineCalculator";
+import { NoteType } from "../../VoiceData/NoteType";
+import { Arpeggio } from "../../VoiceData/Arpeggio";
 
 // type StemmableNote = Vex.Flow.StemmableNote;
 
@@ -57,12 +58,13 @@ export class VexFlowMeasure extends GraphicalMeasure {
         this.resetLayout();
     }
 
+    public isTabMeasure: boolean = false;
     /** octaveOffset according to active clef */
     public octaveOffset: number = 3;
     /** The VexFlow Voices in the measure */
     public vfVoices: { [voiceID: number]: Vex.Flow.Voice; } = {};
     /** Call this function (if present) to x-format all the voices in the measure */
-    public formatVoices: (width: number) => void;
+    public formatVoices: (width: number, parent: VexFlowMeasure) => void;
     /** The VexFlow Ties in the measure */
     public vfTies: Vex.Flow.StaveTie[] = [];
     /** The repetition instructions given as words or symbols (coda, dal segno..) */
@@ -104,9 +106,11 @@ export class VexFlowMeasure extends GraphicalMeasure {
         // TODO save beginning and end bar type, set these again after new stave.
 
         this.stave = new Vex.Flow.Stave(0, 0, 0, {
+            fill_style: this.rules.StaffLineColor,
             space_above_staff_ln: 0,
-            space_below_staff_ln: 0,
+            space_below_staff_ln: 0
         });
+        // also see VexFlowMusicSheetDrawer.drawSheet() for some other vexflow default value settings (like default font scale)
 
         if (this.ParentStaff) {
             this.setLineNumber(this.ParentStaff.StafflineCount);
@@ -270,11 +274,45 @@ export class VexFlowMeasure extends GraphicalMeasure {
         this.updateInstructionWidth();
     }
 
-    public addMeasureLine(lineType: SystemLinesEnum, linePosition: SystemLinePosition): void {
+    // Render initial line is whether or not to render a single bar line at the beginning (if the repeat line we are drawing is
+    // offset by a clef, for ex.)
+    public addMeasureLine(lineType: SystemLinesEnum, linePosition: SystemLinePosition, renderInitialLine: boolean = true): void {
         switch (linePosition) {
             case SystemLinePosition.MeasureBegin:
                 switch (lineType) {
                     case SystemLinesEnum.BoldThinDots:
+                        //customize the barline draw function if repeat is beginning of system
+                        if (!renderInitialLine) {
+                            (this.stave as any).modifiers[0].draw = function(stave: Vex.Flow.Stave): void {
+                                (stave as any).checkContext();
+                                this.setRendered();
+                                switch (this.type) {
+                                    case Vex.Flow.Barline.type.SINGLE:
+                                    this.drawVerticalBar(stave, this.x, false);
+                                    break;
+                                    case Vex.Flow.Barline.type.DOUBLE:
+                                    this.drawVerticalBar(stave, this.x, true);
+                                    break;
+                                    case Vex.Flow.Barline.type.END:
+                                    this.drawVerticalEndBar(stave, this.x);
+                                    break;
+                                    case Vex.Flow.Barline.type.REPEAT_BEGIN:
+                                    //removed the vertical line rendering that exists in VF codebase
+                                    this.drawRepeatBar(stave, this.x, true);
+                                    break;
+                                    case Vex.Flow.Barline.type.REPEAT_END:
+                                    this.drawRepeatBar(stave, this.x, false);
+                                    break;
+                                    case Vex.Flow.Barline.type.REPEAT_BOTH:
+                                    this.drawRepeatBar(stave, this.x, false);
+                                    this.drawRepeatBar(stave, this.x, true);
+                                    break;
+                                    default:
+                                    // Default is NONE, so nothing to draw
+                                    break;
+                                }
+                            };
+                        }
                         this.stave.setBegBarType(Vex.Flow.Barline.type.REPEAT_BEGIN);
                         break;
                     default:
@@ -375,7 +413,7 @@ export class VexFlowMeasure extends GraphicalMeasure {
         this.addVolta(repetitionInstruction);
     }
 
-    private addVolta(repetitionInstruction: RepetitionInstruction): void {
+    protected addVolta(repetitionInstruction: RepetitionInstruction): void {
         let voltaType: number = Vex.Flow.Volta.type.BEGIN;
         if (repetitionInstruction.type === RepetitionInstructionEnum.Ending) {
             switch (repetitionInstruction.alignment) {
@@ -404,7 +442,7 @@ export class VexFlowMeasure extends GraphicalMeasure {
             //This causes getSkyLineMinInRange to return an incorrect min value (one from the previous measure, which has been modified)
             //We need to offset the end of what we are measuring by a bit to prevent this, otherwise volta pairs step up
             const start: number = this.PositionAndShape.AbsolutePosition.x + this.PositionAndShape.BorderMarginLeft + 0.4;
-            const end: number = this.PositionAndShape.AbsolutePosition.x + this.PositionAndShape.BorderMarginRight;
+            const end: number = Math.max(this.PositionAndShape.AbsolutePosition.x + this.PositionAndShape.BorderMarginRight, start + 0.4);
             //2 unit gap, since volta is positioned from y center it seems.
             //This prevents cases where the volta is rendered over another element
             const skylineMinForMeasure: number = skyBottomLineCalculator.getSkyLineMinInRange( start, end ) - 2;
@@ -422,59 +460,51 @@ export class VexFlowMeasure extends GraphicalMeasure {
                 newSkylineValueForMeasure = skylineMinForMeasure;
             }
 
-            /*
-                Code here that is commented out is for finding the previous measure volta height
-                and matching it or resetting it to ours.
-                Still needs work. When we get to higher measure numbers, prev measures don't seem to be available?
-
+            let prevMeasure: VexFlowMeasure = undefined;
             //if we already have a volta in the prev measure, should match it's height, or if we are higher, it should match ours
             //find previous sibling measure that may have volta
-            let measureIndex = this.parentSourceMeasure.measureListIndex;
-            //this.parentSourceMeasure.getPreviousMeasure();
-            if(measureIndex > 0){
-                let prevMeasureIndex = measureIndex-1;
-                let prevMeasure : VexFlowMeasure = undefined;
-                // find first visible StaffLine
-                //Need to find the uppermost, where the volta would go
-                const measures: VexFlowMeasure[] = <VexFlowMeasure[]>this.ParentMusicSystem.GraphicalMeasures[prevMeasureIndex];
-                if(measures !== undefined && measures.length > 0){
-                    for (let idx: number = 0, len: number = measures.length; idx < len; ++idx) {
-                        const graphicalMeasure: VexFlowMeasure = measures[idx];
-                        if (graphicalMeasure.ParentStaffLine && graphicalMeasure.ParentStaff.ParentInstrument.Visible) {
-                            prevMeasure = <VexFlowMeasure>graphicalMeasure;
-                        break;
-                        }
-                    }
+            const currentMeasureNumber: number = this.parentSourceMeasure.MeasureNumber;
+            for (let i: number = 0; i < this.ParentStaffLine.Measures.length; i++) {
+                const tempMeasure: GraphicalMeasure = this.ParentStaffLine.Measures[i];
+                if (!(tempMeasure instanceof VexFlowMeasure)) {
+                    // can happen for MultipleRestMeasures
+                    continue;
                 }
+                if (tempMeasure.MeasureNumber === currentMeasureNumber - 1 ||
+                    tempMeasure.MeasureNumber + tempMeasure.parentSourceMeasure?.multipleRestMeasures === currentMeasureNumber) {
+                    //We found the previous top measure
+                    prevMeasure = tempMeasure as VexFlowMeasure;
+                }
+            }
 
-                if(prevMeasure){
-                    let prevStaveModifiers = prevMeasure.stave.getModifiers();
-                    for(let i = 0; i < prevStaveModifiers.length; i++){
-                        let nextStaveModifier = prevStaveModifiers[i];
-                        if(nextStaveModifier.hasOwnProperty("volta")){
-                            const prevskyBottomLineCalculator: SkyBottomLineCalculator = prevMeasure.ParentStaffLine.SkyBottomLineCalculator;
-                            const prevStart: number = prevMeasure.PositionAndShape.AbsolutePosition.x + prevMeasure.PositionAndShape.BorderMarginLeft + 0.4;
-                            const prevEnd: number = prevMeasure.PositionAndShape.AbsolutePosition.x + prevMeasure.PositionAndShape.BorderMarginRight;
-                            let prevMeasureSkyline: number = prevskyBottomLineCalculator.getSkyLineMinInRange(prevStart, prevEnd);
-                            //if prev skyline is higher, use it
-                            if(prevMeasureSkyline <= newSkylineValueForMeasure){
-                                let skylineDifference = prevMeasureSkyline - newSkylineValueForMeasure;
-                                vexFlowVoltaHeight += skylineDifference;
-                                newSkylineValueForMeasure = prevMeasureSkyline;
-                            } else { //otherwise, we are higher. Need to adjust prev
-                                (nextStaveModifier as any).y_shift = vexFlowVoltaHeight*10;
-                                prevMeasure.ParentStaffLine.SkyBottomLineCalculator.updateSkyLineInRange(prevStart, prevEnd, newSkylineValueForMeasure);
-                            }
+            if (prevMeasure) {
+                const prevStaveModifiers: Vex.Flow.StaveModifier[] = prevMeasure.stave.getModifiers();
+                for (let i: number = 0; i < prevStaveModifiers.length; i++) {
+                    const nextStaveModifier: Vex.Flow.StaveModifier = prevStaveModifiers[i];
+                    if (nextStaveModifier.hasOwnProperty("volta")) {
+                        const prevskyBottomLineCalculator: SkyBottomLineCalculator = prevMeasure.ParentStaffLine.SkyBottomLineCalculator;
+                        const prevStart: number = prevMeasure.PositionAndShape.AbsolutePosition.x + prevMeasure.PositionAndShape.BorderMarginLeft + 0.4;
+                        const prevEnd: number = Math.max(
+                            prevMeasure.PositionAndShape.AbsolutePosition.x + prevMeasure.PositionAndShape.BorderMarginRight,
+                            prevStart + 0.4);
+                        const prevMeasureSkyline: number = prevskyBottomLineCalculator.getSkyLineMinInRange(prevStart, prevEnd);
+                        //if prev skyline is higher, use it
+                        if (prevMeasureSkyline <= newSkylineValueForMeasure) {
+                            const skylineDifference: number = prevMeasureSkyline - newSkylineValueForMeasure;
+                            vexFlowVoltaHeight += skylineDifference;
+                            newSkylineValueForMeasure = prevMeasureSkyline;
+                        } else { //otherwise, we are higher. Need to adjust prev
+                            (nextStaveModifier as any).y_shift = vexFlowVoltaHeight * 10;
+                            prevMeasure.ParentStaffLine.SkyBottomLineCalculator.updateSkyLineInRange(prevStart, prevEnd, newSkylineValueForMeasure);
                         }
                     }
                 }
-            }*/
+            }
 
             //convert to VF units (pixels)
             vexFlowVoltaHeight *= 10;
             this.stave.setVoltaType(voltaType, repetitionInstruction.endingIndices[0], vexFlowVoltaHeight);
             skyBottomLineCalculator.updateSkyLineInRange(start, end, newSkylineValueForMeasure);
-           //this.ParentStaffLine.SkyBottomLineCalculator.calculateLines();
         }
     }
 
@@ -531,17 +561,18 @@ export class VexFlowMeasure extends GraphicalMeasure {
                 beam.setContext(ctx).draw();
             }
         }
-        if (this.autoTupletVfBeams) {
-            for (const beam of this.autoTupletVfBeams) {
-                beam.setContext(ctx).draw();
+        if (!this.isTabMeasure || this.rules.TupletNumbersInTabs) {
+            if (this.autoTupletVfBeams) {
+                for (const beam of this.autoTupletVfBeams) {
+                    beam.setContext(ctx).draw();
+                }
             }
-        }
-
-        // Draw tuplets
-        for (const voiceID in this.vftuplets) {
-            if (this.vftuplets.hasOwnProperty(voiceID)) {
-                for (const tuplet of this.vftuplets[voiceID]) {
-                    tuplet.setContext(ctx).draw();
+            // Draw tuplets
+            for (const voiceID in this.vftuplets) {
+                if (this.vftuplets.hasOwnProperty(voiceID)) {
+                    for (const tuplet of this.vftuplets[voiceID]) {
+                        tuplet.setContext(ctx).draw();
+                    }
                 }
             }
         }
@@ -564,7 +595,7 @@ export class VexFlowMeasure extends GraphicalMeasure {
         if (this.formatVoices) {
             // set the width of the voices to the current measure width:
             // (The width of the voices does not include the instructions (StaveModifiers))
-            this.formatVoices((this.PositionAndShape.Size.width - this.beginInstructionsWidth - this.endInstructionsWidth) * unitInPixels);
+            this.formatVoices((this.PositionAndShape.Size.width - this.beginInstructionsWidth - this.endInstructionsWidth) * unitInPixels, this);
         }
     }
 
@@ -757,6 +788,10 @@ export class VexFlowMeasure extends GraphicalMeasure {
                     for (const gve of voiceEntries) {
                         if (gve.parentVoiceEntry.ParentVoice === psBeam.Notes[0].ParentVoiceEntry.ParentVoice) {
                             autoStemBeam = gve.parentVoiceEntry.WantedStemDirection === StemDirectionType.Undefined;
+                            if (psBeam.Notes[0].NoteTuplet) {
+                                autoStemBeam = true; // TODO fix necessary for now for tuplets with beams, see test_drum_tublet_beams
+                                break;
+                            }
                         }
                     }
 
@@ -792,6 +827,11 @@ export class VexFlowMeasure extends GraphicalMeasure {
                                 }
                             }
                             vfBeam.setStyle({ fillStyle: beamColor, strokeStyle: beamColor });
+                        }
+                        if (this.rules.FlatBeams) {
+                            (<any>vfBeam).render_options.flat_beams = true;
+                            (<any>vfBeam).render_options.flat_beam_offset = this.rules.FlatBeamOffset;
+                            (<any>vfBeam).render_options.flat_beam_offset_per_beam = this.rules.FlatBeamOffsetPerBeam;
                         }
                         vfbeams.push(vfBeam);
                     } else {
@@ -890,7 +930,13 @@ export class VexFlowMeasure extends GraphicalMeasure {
                     } else {
                         if (currentTuplet !== noteTuplet) { // new tuplet, finish old one
                             if (tupletNotesToAutoBeam.length > 1) {
-                                this.autoTupletVfBeams.push(new Vex.Flow.Beam(tupletNotesToAutoBeam, true));
+                                const vfBeam: Vex.Flow.Beam = new Vex.Flow.Beam(tupletNotesToAutoBeam, true);
+                                if (this.rules.FlatBeams) {
+                                    (<any>vfBeam).render_options.flat_beams = true;
+                                    (<any>vfBeam).render_options.flat_beam_offset = this.rules.FlatBeamOffset;
+                                    (<any>vfBeam).render_options.flat_beam_offset_per_beam = this.rules.FlatBeamOffsetPerBeam;
+                                }
+                                this.autoTupletVfBeams.push(vfBeam);
                             }
                             tupletNotesToAutoBeam = [];
                             currentTuplet = noteTuplet;
@@ -908,7 +954,13 @@ export class VexFlowMeasure extends GraphicalMeasure {
             }
         }
         if (tupletNotesToAutoBeam.length >= 2) {
-            this.autoTupletVfBeams.push(new Vex.Flow.Beam(tupletNotesToAutoBeam, true));
+            const vfBeam: Vex.Flow.Beam = new Vex.Flow.Beam(tupletNotesToAutoBeam, true);
+            if (this.rules.FlatBeams) {
+                (<any>vfBeam).render_options.flat_beams = true;
+                (<any>vfBeam).render_options.flat_beam_offset = this.rules.FlatBeamOffset;
+                (<any>vfBeam).render_options.flat_beam_offset_per_beam = this.rules.FlatBeamOffsetPerBeam;
+            }
+            this.autoTupletVfBeams.push(vfBeam);
         }
         if (consecutiveBeamableNotes.length >= 2) {
             for (const note of consecutiveBeamableNotes) {
@@ -934,8 +986,13 @@ export class VexFlowMeasure extends GraphicalMeasure {
 
         for (const notesForSeparateAutoBeam of separateAutoBeams) {
             const newBeams: Vex.Flow.Beam[] = Vex.Flow.Beam.generateBeams(notesForSeparateAutoBeam, generateBeamOptions);
-            for (const beam of newBeams) {
-                this.autoVfBeams.push(beam);
+            for (const vfBeam of newBeams) {
+                if (this.rules.FlatBeams) {
+                    (<any>vfBeam).render_options.flat_beams = true;
+                    (<any>vfBeam).render_options.flat_beam_offset = this.rules.FlatBeamOffset;
+                    (<any>vfBeam).render_options.flat_beam_offset_per_beam = this.rules.FlatBeamOffsetPerBeam;
+                }
+                this.autoVfBeams.push(vfBeam);
             }
         }
     }
@@ -966,9 +1023,14 @@ export class VexFlowMeasure extends GraphicalMeasure {
                       const bracketed: boolean = tuplet.Bracket ||
                         (tuplet.TupletLabelNumber === 3 && this.rules.TripletsBracketed) ||
                         (tuplet.TupletLabelNumber !== 3 && this.rules.TupletsBracketed);
+                      let location: number = Vex.Flow.Tuplet.LOCATION_TOP;
+                      if (tuplet.tupletLabelNumberPlacement === PlacementEnum.Below) {
+                          location = Vex.Flow.Tuplet.LOCATION_BOTTOM;
+                      }
                       vftuplets.push(new Vex.Flow.Tuplet( tupletStaveNotes,
                                                           {
                                                             bracketed: bracketed,
+                                                            location: location,
                                                             notes_occupied: notesOccupied,
                                                             num_notes: tuplet.TupletLabelNumber, //, location: -1, ratioed: true
                                                             ratioed: this.rules.TupletsRatioed,
@@ -1136,7 +1198,7 @@ export class VexFlowMeasure extends GraphicalMeasure {
         for ( const vfStaffEntry of this.staffEntries ) {
             for ( const gVoiceEntry of vfStaffEntry.graphicalVoiceEntries) {
                 for ( const gnote of gVoiceEntry.notes) {
-                    const vfnote: [StaveNote, number] = (gnote as VexFlowGraphicalNote).vfnote;
+                    const vfnote: [StemmableNote , number] = (gnote as VexFlowGraphicalNote).vfnote;
                     if (!vfnote || !vfnote[0]) {
                         continue;
                     }
@@ -1167,7 +1229,7 @@ export class VexFlowMeasure extends GraphicalMeasure {
             const graphicalVoiceEntries: GraphicalVoiceEntry[] = graphicalStaffEntry.graphicalVoiceEntries;
             for (const gve of graphicalVoiceEntries) {
                 const vfStaveNote: StemmableNote = (gve as VexFlowVoiceEntry).vfStaveNote;
-                VexFlowConverter.generateArticulations(vfStaveNote, gve.notes[0].sourceNote.ParentVoiceEntry.Articulations);
+                VexFlowConverter.generateArticulations(vfStaveNote, gve.notes[0].sourceNote.ParentVoiceEntry.Articulations, this.rules);
             }
         }
     }
@@ -1194,22 +1256,25 @@ export class VexFlowMeasure extends GraphicalMeasure {
 
     protected createFingerings(voiceEntry: GraphicalVoiceEntry): void {
         const vexFlowVoiceEntry: VexFlowVoiceEntry = voiceEntry as VexFlowVoiceEntry;
-        const technicalInstructions: TechnicalInstruction[] = voiceEntry.parentVoiceEntry.TechnicalInstructions;
-        let fingeringsCount: number = 0;
-        for (const instruction of technicalInstructions) {
-            if (instruction.type === TechnicalInstructionType.Fingering) {
-                fingeringsCount++;
+        let numberOfFingerings: number = 0;
+        // count total number of fingerings
+        for (const note of voiceEntry.notes) {
+            const fingering: TechnicalInstruction = note.sourceNote.Fingering;
+            if (fingering) {
+                numberOfFingerings++;
             }
         }
         let fingeringIndex: number = -1;
-        for (const fingeringInstruction of technicalInstructions) {
-            if (fingeringInstruction.type !== TechnicalInstructionType.Fingering) {
+        for (const note of voiceEntry.notes) {
+            const fingering: TechnicalInstruction = note.sourceNote.Fingering;
+            if (!fingering) {
+                fingeringIndex++;
                 continue;
             }
             fingeringIndex++; // 0 for first fingering
             let fingeringPosition: PlacementEnum = this.rules.FingeringPosition;
-            if (fingeringInstruction.placement !== PlacementEnum.NotYetDefined) {
-                fingeringPosition = fingeringInstruction.placement;
+            if (fingering.placement !== PlacementEnum.NotYetDefined) {
+                fingeringPosition = fingering.placement;
             }
             let modifierPosition: any; // Vex.Flow.Stavemodifier.Position
             switch (fingeringPosition) {
@@ -1239,21 +1304,21 @@ export class VexFlowMeasure extends GraphicalMeasure {
                     }
             }
 
-            const fretFinger: Vex.Flow.FretHandFinger = new Vex.Flow.FretHandFinger(fingeringInstruction.value);
+            const fretFinger: Vex.Flow.FretHandFinger = new Vex.Flow.FretHandFinger(fingering.value);
             fretFinger.setPosition(modifierPosition);
             fretFinger.setOffsetX(this.rules.FingeringOffsetX);
             if (fingeringPosition === PlacementEnum.Above || fingeringPosition === PlacementEnum.Below) {
                 const offsetYSign: number = fingeringPosition === PlacementEnum.Above ? -1 : 1; // minus y is up
                 const ordering: number = fingeringPosition === PlacementEnum.Above ? fingeringIndex :
-                    fingeringsCount - 1 - fingeringIndex; // reverse order for fingerings below staff
-                if (this.rules.FingeringInsideStafflines && fingeringsCount > 1) { // y-shift for single fingering is ok
+                    numberOfFingerings - 1 - fingeringIndex; // reverse order for fingerings below staff
+                if (this.rules.FingeringInsideStafflines && numberOfFingerings > 1) { // y-shift for single fingering is ok
                     // experimental, bounding boxes wrong for fretFinger above/below, better would be creating Labels
                     // set y-shift. vexflow fretfinger simply places directly above/below note
                     const perFingeringShift: number = fretFinger.getWidth() / 2;
-                    const shiftCount: number = fingeringsCount * 2.5;
+                    const shiftCount: number = numberOfFingerings * 2.5;
                     fretFinger.setOffsetY(offsetYSign * (ordering + shiftCount) * perFingeringShift);
                 } else if (!this.rules.FingeringInsideStafflines) { // use StringNumber for placement above/below stafflines
-                    const stringNumber: Vex.Flow.StringNumber = new Vex.Flow.StringNumber(fingeringInstruction.value);
+                    const stringNumber: Vex.Flow.StringNumber = new Vex.Flow.StringNumber(fingering.value);
                     (<any>stringNumber).radius = 0; // hack to remove the circle around the number
                     stringNumber.setPosition(modifierPosition);
                     stringNumber.setOffsetY(offsetYSign * ordering * stringNumber.getWidth() * 2 / 3);
@@ -1262,13 +1327,12 @@ export class VexFlowMeasure extends GraphicalMeasure {
                     continue;
                 }
             }
-            if (vexFlowVoiceEntry.vfStaveNote.getCategory() === "tabnotes") {
-                // TODO this doesn't work yet. don't add fingering for tabs for now.
-                // vexFlowVoiceEntry.vfStaveNote.addModifier(fretFinger, fingeringIndex);
-            } else {
-                // Vexflow made a mess with the addModifier signature that changes through each class so we just cast to any :(
-                vexFlowVoiceEntry.vfStaveNote.addModifier((fingeringIndex as any), (fretFinger as any));
-            }
+            // if (vexFlowVoiceEntry.vfStaveNote.getCategory() === "tabnotes") {
+              // TODO this doesn't work yet for tabnotes. don't add fingering for tabs for now.
+              // vexFlowVoiceEntry.vfStaveNote.addModifier(fretFinger, fingeringIndex);
+
+            // Vexflow made a mess with the addModifier signature that changes through each class so we just cast to any :(
+            vexFlowVoiceEntry.vfStaveNote.addModifier((fingeringIndex as any), (fretFinger as any));
         }
     }
 

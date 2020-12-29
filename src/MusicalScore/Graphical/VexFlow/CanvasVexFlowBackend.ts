@@ -6,11 +6,13 @@ import {Fonts} from "../../../Common/Enums/Fonts";
 import {RectangleF2D} from "../../../Common/DataObjects/RectangleF2D";
 import {PointF2D} from "../../../Common/DataObjects/PointF2D";
 import {VexFlowConverter} from "./VexFlowConverter";
-import {BackendType} from "../../../OpenSheetMusicDisplay";
+import {BackendType} from "../../../OpenSheetMusicDisplay/OSMDOptions";
 import {EngravingRules} from "../EngravingRules";
 import {GraphicalMusicPage} from "../GraphicalMusicPage";
 
 export class CanvasVexFlowBackend extends VexFlowBackend {
+    private zoom: number;
+
     constructor(rules: EngravingRules) {
         super();
         this.rules = rules;
@@ -24,7 +26,15 @@ export class CanvasVexFlowBackend extends VexFlowBackend {
         return BackendType.Canvas;
     }
 
-    public initialize(container: HTMLElement): void {
+    public getCanvasSize(): number {
+        return document.getElementById("osmdCanvasPage" + this.graphicalMusicPage.PageNumber)?.offsetHeight;
+        // smaller inner canvas:
+        // return Number.parseInt(
+        //     document.getElementById("osmdCanvasVexFlowBackendCanvas" + this.graphicalMusicPage.PageNumber)?.style.height, 10);
+    }
+
+    public initialize(container: HTMLElement, zoom: number): void {
+        this.zoom = zoom;
         this.canvas = document.createElement("canvas");
         if (!this.graphicalMusicPage) {
             this.graphicalMusicPage = new GraphicalMusicPage(undefined);
@@ -32,6 +42,7 @@ export class CanvasVexFlowBackend extends VexFlowBackend {
         }
         this.canvas.id = "osmdCanvasVexFlowBackendCanvas" + this.graphicalMusicPage.PageNumber; // needed to extract image buffer from js
         this.inner = document.createElement("div");
+        this.inner.id = "osmdCanvasPage" + this.graphicalMusicPage.PageNumber;
         this.inner.style.position = "relative";
         this.canvas.style.zIndex = "0";
         this.inner.appendChild(this.canvas);
@@ -70,7 +81,8 @@ export class CanvasVexFlowBackend extends VexFlowBackend {
             this.ctx.save();
             // note that this will hide the cursor
             this.ctx.setFillStyle(this.rules.PageBackgroundColor);
-            this.ctx.fillRect(0, 0, (this.canvas as any).width, (this.canvas as any).height);
+            this.zoom = 1; // remove
+            this.ctx.fillRect(0, 0, (this.canvas as any).width / this.zoom, (this.canvas as any).height / this.zoom);
             this.ctx.restore();
         }
     }

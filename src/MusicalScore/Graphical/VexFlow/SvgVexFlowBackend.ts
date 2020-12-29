@@ -6,12 +6,13 @@ import {FontStyles} from "../../../Common/Enums/FontStyles";
 import {Fonts} from "../../../Common/Enums/Fonts";
 import {RectangleF2D} from "../../../Common/DataObjects/RectangleF2D";
 import {PointF2D} from "../../../Common/DataObjects/PointF2D";
-import {EngravingRules} from "..";
-import {BackendType} from "../../../OpenSheetMusicDisplay";
+import {BackendType} from "../../../OpenSheetMusicDisplay/OSMDOptions";
+import {EngravingRules} from "../EngravingRules";
 
 export class SvgVexFlowBackend extends VexFlowBackend {
 
     private ctx: Vex.Flow.SVGContext;
+    private zoom: number;
 
     constructor(rules: EngravingRules) {
         super();
@@ -26,8 +27,14 @@ export class SvgVexFlowBackend extends VexFlowBackend {
         return BackendType.SVG;
     }
 
-    public initialize(container: HTMLElement): void {
+    public getCanvasSize(): number {
+        return document.getElementById("osmdCanvasPage" + this.graphicalMusicPage.PageNumber)?.offsetHeight;
+    }
+
+    public initialize(container: HTMLElement, zoom: number): void {
+        this.zoom = zoom;
         this.canvas = document.createElement("div");
+        this.canvas.id = "osmdCanvasPage" + this.graphicalMusicPage.PageNumber;
         // this.canvas.id = uniqueID // TODO create unique tagName like with cursor now?
         this.inner = this.canvas;
         this.inner.style.position = "relative";
@@ -35,6 +42,7 @@ export class SvgVexFlowBackend extends VexFlowBackend {
         container.appendChild(this.inner);
         this.renderer = new Vex.Flow.Renderer(this.canvas, this.getVexflowBackendType());
         this.ctx = <Vex.Flow.SVGContext>this.renderer.getContext();
+        this.ctx.svg.id = "osmdSvgPage" + this.graphicalMusicPage.PageNumber;
     }
 
     public getContext(): Vex.Flow.SVGContext {
@@ -62,8 +70,9 @@ export class SvgVexFlowBackend extends VexFlowBackend {
             this.ctx.save();
             // note that this will hide the cursor
             this.ctx.setFillStyle(this.rules.PageBackgroundColor);
+            this.ctx.setStrokeStyle("#12345600"); // transparent
 
-            this.ctx.fillRect(0, 0, this.canvas.offsetWidth, this.canvas.offsetHeight);
+            this.ctx.fillRect(0, 0, this.canvas.offsetWidth / this.zoom, this.canvas.offsetHeight / this.zoom);
             this.ctx.restore();
         }
     }

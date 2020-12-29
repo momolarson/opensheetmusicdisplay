@@ -1,6 +1,3 @@
-/* tslint:disable no-unused-variable */
-//FIXME: Enble tslint again when all functions are implemented and in use!
-
 import { EngravingRules } from "./EngravingRules";
 import { StaffLine } from "./StaffLine";
 import { PointF2D } from "../../Common/DataObjects/PointF2D";
@@ -64,7 +61,7 @@ export class SkyBottomLineCalculator {
             const oldMeasureWidth: number = vsStaff.getWidth();
             // We need to tell the VexFlow stave about the canvas width. This looks
             // redundant because it should know the canvas but somehow it doesn't.
-            // Maybe I am overlooking something but for no this does the trick
+            // Maybe I am overlooking something but for now this does the trick
             vsStaff.setWidth(width);
             measure.format();
             vsStaff.setWidth(oldMeasureWidth);
@@ -105,6 +102,13 @@ export class SkyBottomLineCalculator {
                     }
                 }
             }
+
+            for (let idx: number = 0; idx < tmpSkyLine.length; idx++) {
+                if (tmpSkyLine[idx] === undefined) {
+                    tmpSkyLine[idx] = Math.max(this.findPreviousValidNumber(idx, tmpSkyLine), this.findNextValidNumber(idx, tmpSkyLine));
+                }
+            }
+
             this.mSkyLine.push(...tmpSkyLine);
             this.mBottomLine.push(...tmpBottomLine);
 
@@ -153,6 +157,41 @@ export class SkyBottomLineCalculator {
         // Remap the values from 0 to +/- height in units
         this.mSkyLine = this.mSkyLine.map(v => (v - Math.max(...this.mSkyLine)) / unitInPixels + this.StaffLineParent.TopLineOffset);
         this.mBottomLine = this.mBottomLine.map(v => (v - Math.min(...this.mBottomLine)) / unitInPixels + this.StaffLineParent.BottomLineOffset);
+    }
+
+    /**
+     * go backwards through the skyline array and find a number so that
+     * we can properly calculate the average
+     * @param start
+     * @param backend
+     * @param color
+     */
+    private findPreviousValidNumber(start: number, tSkyLine: number[]): number {
+        for (let idx: number = start; idx >= 0; idx--) {
+            if (!isNaN(tSkyLine[idx])) {
+                return tSkyLine[idx];
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * go forward through the skyline array and find a number so that
+     * we can properly calculate the average
+     * @param start
+     * @param backend
+     * @param color
+     */
+    private findNextValidNumber(start: number, tSkyLine: Array<number>): number {
+        if (start >= tSkyLine.length) {
+            return tSkyLine[start - 1];
+        }
+        for (let idx: number = start; idx < tSkyLine.length; idx++) {
+            if (!isNaN(tSkyLine[idx])) {
+                return tSkyLine[idx];
+            }
+        }
+        return 0;
     }
 
     /**
@@ -435,7 +474,7 @@ export class SkyBottomLineCalculator {
         endIndex = Math.ceil(endIndex * this.SamplingUnit);
 
         if (endIndex < startIndex) {
-            throw new Error("start index of line is greater then the end index");
+            throw new Error("start index of line is greater than the end index");
         }
 
         if (startIndex < 0) {

@@ -62,21 +62,27 @@ export class MusicSystemBuilder {
         // the first System - create also its Labels
         this.currentSystemParams.currentSystem = this.initMusicSystem();
 
-        let numberOfMeasures: number = 0;
-        for (let idx: number = 0, len: number = this.measureList.length; idx < len; ++idx) {
-            if (this.measureList[idx].length > 0) {
-                numberOfMeasures++;
-            }
-        }
+        // let numberOfMeasures: number = 0;
+        // for (let idx: number = 0, len: number = this.measureList.length; idx < len; ++idx) {
+        //     if (this.measureList[idx].length > 0) {
+        //         numberOfMeasures++;
+        //     }
+        // }
+        // console.log(`numberOfMeasures: ${numberOfMeasures}`);
 
         // go through measures and add to system until system gets too long -> finish system and start next system [line break, new system].
-        while (this.measureListIndex < numberOfMeasures) {
+        while (this.measureListIndex < this.measureList.length) {
             const graphicalMeasures: GraphicalMeasure[] = this.measureList[this.measureListIndex];
+            if (!graphicalMeasures || !graphicalMeasures[0]) {
+                this.measureListIndex++;
+                continue; // previous measure was probably multi-rest, skip this one
+            }
             for (let idx: number = 0, len: number = graphicalMeasures.length; idx < len; ++idx) {
                 graphicalMeasures[idx].resetLayout();
             }
             const sourceMeasure: SourceMeasure = graphicalMeasures[0].parentSourceMeasure;
             const sourceMeasureEndsPart: boolean = sourceMeasure.HasEndLine;
+            const sourceMeasureBreaksSystem: boolean = sourceMeasureEndsPart && this.rules.NewPartAndSystemAfterFinalBarline;
             const isSystemStartMeasure: boolean = this.currentSystemParams.IsSystemStartMeasure();
             const isFirstSourceMeasure: boolean = sourceMeasure === this.graphicalMusicSheet.ParentMusicSheet.getFirstSourceMeasure();
             let currentMeasureBeginInstructionsWidth: number = this.rules.MeasureLeftMargin;
@@ -114,12 +120,16 @@ export class MusicSystemBuilder {
             let nextSourceMeasure: SourceMeasure = undefined;
             if (this.measureListIndex + 1 < this.measureList.length) {
                 const nextGraphicalMeasures: GraphicalMeasure[] = this.measureList[this.measureListIndex + 1];
-                nextSourceMeasure = nextGraphicalMeasures[0].parentSourceMeasure;
-                if (nextSourceMeasure.hasBeginInstructions()) {
+                // TODO: consider multirest. then the next graphical measure may not exist. but there shouldn't be hidden changes here.
+                nextSourceMeasure = nextGraphicalMeasures[0]?.parentSourceMeasure;
+                if (nextSourceMeasure?.hasBeginInstructions()) {
                     nextMeasureBeginInstructionWidth += this.addBeginInstructions(nextGraphicalMeasures, false, false);
                 }
             }
-            const totalMeasureWidth: number = currentMeasureBeginInstructionsWidth + currentMeasureEndInstructionsWidth + currentMeasureVarWidth;
+            let totalMeasureWidth: number = currentMeasureBeginInstructionsWidth + currentMeasureEndInstructionsWidth + currentMeasureVarWidth;
+            if (graphicalMeasures[0]?.parentSourceMeasure?.multipleRestMeasures) {
+                totalMeasureWidth = this.rules.MultipleRestMeasureDefaultWidth; // default 4 (12 seems too large)
+            }
             const measureFitsInSystem: boolean = this.currentSystemParams.currentWidth + totalMeasureWidth + nextMeasureBeginInstructionWidth < systemMaxWidth;
             const doXmlPageBreak: boolean = this.rules.NewPageAtXMLNewPageAttribute && sourceMeasure.printNewPageXml;
             const doXmlLineBreak: boolean = doXmlPageBreak || // also create new system if doing page break
@@ -131,11 +141,19 @@ export class MusicSystemBuilder {
                 );
                 this.updateActiveClefs(sourceMeasure, graphicalMeasures);
                 this.measureListIndex++;
-                if (sourceMeasureEndsPart) {
-                    this.finalizeCurrentAndCreateNewSystem(graphicalMeasures, true, false);
+                if (sourceMeasureBreaksSystem) {
+                    if (this.rules.MaxSystemToDrawNumber === this.musicSystems.length) {
+                        this.finalizeCurrentSystem(graphicalMeasures, !this.rules.StretchLastSystemLine, false);
+                        return this.musicSystems;
+                    }
+                    this.finalizeCurrentAndCreateNewSystem(graphicalMeasures, !this.rules.StretchLastSystemLine, false);
                 }
                 prevMeasureEndsPart = sourceMeasureEndsPart;
             } else {
+                if (this.rules.MaxSystemToDrawNumber === this.musicSystems.length) {
+                    this.finalizeCurrentSystem(graphicalMeasures, false, true, doXmlPageBreak);
+                    return this.musicSystems;
+                }
                 // finalize current system and prepare a new one
                 this.finalizeCurrentAndCreateNewSystem(graphicalMeasures, false, true, doXmlPageBreak);
                 // don't increase measure index to check this measure now again
@@ -143,7 +161,11 @@ export class MusicSystemBuilder {
             }
         }
         if (this.currentSystemParams.systemMeasures.length > 0) {
-            this.finalizeCurrentAndCreateNewSystem(this.measureList[this.measureList.length - 1], true, false);
+            if (this.rules.MaxSystemToDrawNumber === this.musicSystems.length) {
+                this.finalizeCurrentSystem(this.measureList[this.measureList.length - 1], !this.rules.StretchLastSystemLine, false);
+                return this.musicSystems;
+            }
+            this.finalizeCurrentAndCreateNewSystem(this.measureList[this.measureList.length - 1], !this.rules.StretchLastSystemLine, false);
         }
         return this.musicSystems;
     }
@@ -191,6 +213,18 @@ export class MusicSystemBuilder {
                                                 systemEndsPart: boolean = false,
                                                 checkExtraInstructionMeasure: boolean = true,
                                                 startNewPage: boolean = false): void {
+        this.finalizeCurrentSystem(measures, systemEndsPart, checkExtraInstructionMeasure, startNewPage);
+        this.currentSystemParams = new SystemBuildParameters(); // this and the following used to be in finalizeCurrentSystem after stretchMusicSystem
+        if (measures !== undefined &&
+            this.measureListIndex < this.measureList.length) {
+            this.currentSystemParams.currentSystem = this.initMusicSystem();
+        }
+    }
+
+    protected finalizeCurrentSystem(measures: GraphicalMeasure[],
+                                    systemEndsPart: boolean = false,
+                                    checkExtraInstructionMeasure: boolean = true,
+                                    startNewPage: boolean = false): void {
         this.currentSystemParams.currentSystem.breaksPage = startNewPage;
         this.adaptRepetitionLineWithIfNeeded();
         if (measures !== undefined &&
@@ -198,11 +232,6 @@ export class MusicSystemBuilder {
             this.checkAndCreateExtraInstructionMeasure(measures);
         }
         this.stretchMusicSystem(systemEndsPart);
-        this.currentSystemParams = new SystemBuildParameters();
-        if (measures !== undefined &&
-            this.measureListIndex < this.measureList.length) {
-            this.currentSystemParams.currentSystem = this.initMusicSystem();
-        }
     }
 
     /**
@@ -281,7 +310,7 @@ export class MusicSystemBuilder {
         const instruments: Instrument[] = this.graphicalMusicSheet.ParentMusicSheet.Instruments;
         for (let idx: number = 0, len: number = instruments.length; idx < len; ++idx) {
             const instrument: Instrument = instruments[idx];
-            if (instrument.Voices.length === 0 || !instrument.Visible) {
+            if (!instrument.Visible || instrument.Voices.length === 0) {
                 continue;
             }
             for (let idx2: number = 0, len2: number = instrument.Staves.length; idx2 < len2; ++idx2) {
@@ -332,14 +361,8 @@ export class MusicSystemBuilder {
             musicSystem.StaffLines.push(staffLine);
             const boundingBox: BoundingBox = staffLine.PositionAndShape;
             const relativePosition: PointF2D = new PointF2D();
-            if (musicSystem === this.musicSystems[0] &&
-                !this.rules.CompactMode) {
-                relativePosition.x = this.rules.FirstSystemMargin;
-                boundingBox.BorderRight = musicSystem.PositionAndShape.Size.width - this.rules.FirstSystemMargin;
-            } else {
-                relativePosition.x = 0.0;
-                boundingBox.BorderRight = musicSystem.PositionAndShape.Size.width;
-            }
+            relativePosition.x = 0.0;
+            boundingBox.BorderRight = musicSystem.PositionAndShape.Size.width;
             relativePosition.y = relativeYPosition;
             boundingBox.RelativePosition = relativePosition;
             boundingBox.BorderLeft = 0.0;
@@ -373,11 +396,16 @@ export class MusicSystemBuilder {
                 const graphicalMeasure: GraphicalMeasure = this.graphicalMusicSheet
                     .getGraphicalMeasureFromSourceMeasureAndIndex(firstSourceMeasure, staffIndex);
                 this.activeClefs[i] = <ClefInstruction>firstSourceMeasure.FirstInstructionsStaffEntries[staffIndex].Instructions[0];
-                let keyInstruction: KeyInstruction = KeyInstruction.copy(
-                    <KeyInstruction>firstSourceMeasure.FirstInstructionsStaffEntries[staffIndex].Instructions[1]);
-                keyInstruction = this.transposeKeyInstruction(keyInstruction, graphicalMeasure);
-                this.activeKeys[i] = keyInstruction;
-                this.activeRhythm[i] = <RhythmInstruction>firstSourceMeasure.FirstInstructionsStaffEntries[staffIndex].Instructions[2];
+                const firstKeyInstruction: KeyInstruction = <KeyInstruction>firstSourceMeasure.FirstInstructionsStaffEntries[staffIndex].Instructions[1];
+                if (firstKeyInstruction) {
+                    let keyInstruction: KeyInstruction = KeyInstruction.copy(firstKeyInstruction);
+                    keyInstruction = this.transposeKeyInstruction(keyInstruction, graphicalMeasure);
+                    this.activeKeys[i] = keyInstruction;
+                }
+                const firstRhythmInstruction: RhythmInstruction = <RhythmInstruction>
+                    firstSourceMeasure.FirstInstructionsStaffEntries[staffIndex].Instructions[2];
+                // if (firstRhythmInstruction) {
+                this.activeRhythm[i] = firstRhythmInstruction;
             }
         }
     }
@@ -489,9 +517,21 @@ export class MusicSystemBuilder {
             measure.addKeyAtBegin(currentKey, previousKey, currentClef);
             keyAdded = true;
         }
-        if (currentRhythm !== undefined && currentRhythm.PrintObject) {
-            measure.addRhythmAtBegin(currentRhythm);
-            rhythmAdded = true;
+        if (currentRhythm !== undefined && currentRhythm.PrintObject && this.rules.RenderTimeSignatures) {
+            let printRhythm: boolean = true;
+            // check for previous pickup measure
+            const pickupMeasureNumber: number = measure.MeasureNumber - 1;
+            if (measure.MeasureNumber - 1 >= 0) {
+                const previousMeasure: SourceMeasure = this.measureList[pickupMeasureNumber][0]?.parentSourceMeasure;
+                if (previousMeasure?.ImplicitMeasure && previousMeasure?.RhythmPrinted) {
+                    printRhythm = false;
+                }
+            }
+            if (printRhythm) {
+                measure.addRhythmAtBegin(currentRhythm);
+                measure.parentSourceMeasure.RhythmPrinted = true;
+                rhythmAdded = true;
+            }
         }
         if (clefAdded || keyAdded || rhythmAdded) {
             instructionsLengthX += measure.beginInstructionsWidth;
@@ -671,6 +711,16 @@ export class MusicSystemBuilder {
         let sourceMeasure: SourceMeasure = undefined;
         try {
             sourceMeasure = this.measureList[this.measureListIndex][0].parentSourceMeasure;
+            if (this.rules.RenderMultipleRestMeasures && sourceMeasure.multipleRestMeasures > 1) {
+                const newIndex: number = Math.min(
+                    this.graphicalMusicSheet.ParentMusicSheet.SourceMeasures.length - 1, // safety check
+                    sourceMeasure.measureListIndex + sourceMeasure.multipleRestMeasures - 1
+                    // check the bar line of the last sourcemeasure in the multiple measure rest sequence
+                );
+                sourceMeasure = this.graphicalMusicSheet.ParentMusicSheet.SourceMeasures[newIndex];
+                // sourceMeasure = this.measureList[this.measureListIndex + sourceMeasure.multipleRestMeasures - 1][0].parentSourceMeasure;
+                //    this will be possible when the other GraphicalMeasures in the measureList aren't undefined anymore
+            }
         } finally {
             // do nothing
         }
@@ -822,7 +872,7 @@ export class MusicSystemBuilder {
     protected getNextMeasureKeyInstruction(): KeyInstruction {
         if (this.measureListIndex < this.measureList.length - 1) {
             for (let visIndex: number = 0; visIndex < this.measureList[this.measureListIndex].length; visIndex++) {
-                const sourceMeasure: SourceMeasure = this.measureList[this.measureListIndex + 1][visIndex].parentSourceMeasure;
+                const sourceMeasure: SourceMeasure = this.measureList[this.measureListIndex + 1][visIndex]?.parentSourceMeasure;
                 if (!sourceMeasure) {
                     return undefined;
                 }
@@ -867,7 +917,13 @@ export class MusicSystemBuilder {
             for (let measureIndex: number = 0; measureIndex < staffLine.Measures.length; measureIndex++) {
                 const measure: GraphicalMeasure = staffLine.Measures[measureIndex];
                 measure.setPositionInStaffline(currentXPosition);
-                measure.setWidth(measure.beginInstructionsWidth + measure.minimumStaffEntriesWidth * scalingFactor + measure.endInstructionsWidth);
+                const beginInstructionsWidth: number = measure.beginInstructionsWidth;
+                // if (measureIndex === 0 && measure.staffEntries) {
+                //     if (!measure.parentSourceMeasure.hasLyrics) {
+                //         beginInstructionsWidth *= 1; // TODO the first measure in a system is always slightly too big. why? try e.g. 0.6
+                //     }
+                // }
+                measure.setWidth(beginInstructionsWidth + measure.minimumStaffEntriesWidth * scalingFactor + measure.endInstructionsWidth);
                 if (measureIndex < this.currentSystemParams.systemMeasures.length) {
                     const startLine: SystemLinesEnum = this.currentSystemParams.systemMeasures[measureIndex].beginLine;
                     const lineWidth: number = measure.getLineWidth(SystemLinesEnum.BoldThinDots);
@@ -946,6 +1002,8 @@ export class MusicSystemBuilder {
      * @returns {GraphicalMusicPage}
      */
     protected createMusicPage(): GraphicalMusicPage {
+        // const previousPage: GraphicalMusicPage = this.graphicalMusicSheet.MusicPages.last();
+        // const previousSizeY: number = previousPage ? previousPage.PositionAndShape.Size.height : 0;
         const page: GraphicalMusicPage = new GraphicalMusicPage(this.graphicalMusicSheet);
         this.graphicalMusicSheet.MusicPages.push(page);
         page.PageNumber = this.graphicalMusicSheet.MusicPages.length; // caution: page number = page index + 1
@@ -1024,14 +1082,53 @@ export class MusicSystemBuilder {
                     currentYPosition = this.rules.PageTopMargin;
                 }
 
-                // if it is the first System on the FIRST page: Add Title height and gap-distance
-                if (this.graphicalMusicSheet.MusicPages.length === 1 &&
-                    this.rules.RenderTitle) {
-                    currentYPosition +=   this.rules.TitleTopDistance + this.rules.SheetTitleHeight +
+                if (this.graphicalMusicSheet.MusicPages.length === 1) {
+                    /*
+                    Only need this in the event that lyricist or composer text intersects with title,
+                    which seems exceedingly rare.
+                    Leaving here just in case for future needs.
+                    Prefer to use skyline calculator in MusicSheetCalculator.calculatePageLabels
+
+                    let maxLineCount: number = this.graphicalMusicSheet.Composer?.TextLines?.length;
+                    let maxFontHeight: number = this.graphicalMusicSheet.Composer?.Label?.fontHeight;
+                    let lyricistLineCount: number = this.graphicalMusicSheet.Lyricist?.TextLines?.length;
+                    let lyricistFontHeight: number = this.graphicalMusicSheet.Lyricist?.Label?.fontHeight;
+
+                    maxLineCount = maxLineCount ? maxLineCount : 0;
+                    maxFontHeight = maxFontHeight ? maxFontHeight : 0;
+                    lyricistLineCount = lyricistLineCount ? lyricistLineCount : 0;
+                    lyricistFontHeight = lyricistFontHeight ? lyricistFontHeight : 0;
+
+                    let maxHeight: number = maxLineCount * maxFontHeight;
+                    const totalLyricist: number = lyricistLineCount * lyricistFontHeight;
+
+                    if (totalLyricist > maxHeight) {
+                        maxLineCount = lyricistLineCount;
+                        maxFontHeight = lyricistFontHeight;
+                        maxHeight = totalLyricist;
+                    } */
+
+                    if (this.rules.RenderTitle) {
+                    // if it is the first System on the FIRST page: Add Title height and gap-distance
+                    currentYPosition += this.rules.TitleTopDistance + this.rules.SheetTitleHeight +
                                             this.rules.TitleBottomDistance;
+                    }
+
+                    /*
+                    see comment above - only needed for rare case of composer/lyricist being
+                    wide enough to be below the title (or title wide enough to be above)
+                    if (maxLineCount > 2) {
+                        currentYPosition += maxFontHeight * (maxLineCount - 2);
+                    }*/
                 }
                 // now add the border-top: everything that stands out above the staffline:
-                currentYPosition += -currentSystem.PositionAndShape.BorderTop;
+                // note: this is unnecessary. We have PageTopMargin and TitleBottomDistance for this.
+                //   also, this creates a sudden margin spike from PageTopMargin = 0.1 to PageTopMargin = 0.
+                // if (!this.rules.CompactMode) { // don't add extra margins/borders in compact mode
+                //     if (this.rules.PageTopMargin > 0) { // don't add extra margins with PageTopMargin == 0
+                //         currentYPosition += -currentSystem.PositionAndShape.BorderTop;
+                //     }
+                // }
                 const relativePosition: PointF2D = new PointF2D(this.rules.PageLeftMargin + this.rules.SystemLeftMargin,
                                                                 currentYPosition);
                 currentSystem.PositionAndShape.RelativePosition = relativePosition;
@@ -1053,7 +1150,7 @@ export class MusicSystemBuilder {
                 const previousSystem: MusicSystem = this.musicSystems[i - 1];
                 const prevSystemLastStaffline: StaffLine = previousSystem.StaffLines[previousSystem.StaffLines.length - 1];
                 const prevSystemLastStaffLineBB: BoundingBox = prevSystemLastStaffline.PositionAndShape;
-                let distance: number =  this.findReqiredDistanceWithSkyBottomLine(previousSystem, currentSystem);
+                let distance: number =  this.findRequiredDistanceWithSkyBottomLine(previousSystem, currentSystem);
 
                 // make sure the optical distance is the user-defined min distance:
                 distance += this.rules.MinSkyBottomDistBetweenSystems;
@@ -1096,7 +1193,7 @@ export class MusicSystemBuilder {
      * @param upperSystem
      * @param lowerSystem
      */
-    private findReqiredDistanceWithSkyBottomLine(upperSystem: MusicSystem, lowerSystem: MusicSystem): number {
+    private findRequiredDistanceWithSkyBottomLine(upperSystem: MusicSystem, lowerSystem: MusicSystem): number {
         const upperSystemLastStaffLine: StaffLine = upperSystem.StaffLines[upperSystem.StaffLines.length - 1];
         const lowerSystemFirstStaffLine: StaffLine = lowerSystem.StaffLines[0];
         const upperBottomLineArray: number[] = upperSystemLastStaffLine.BottomLine;

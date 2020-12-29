@@ -18,7 +18,7 @@ import {Instrument} from "../Instrument";
 import {BoundingBox} from "./BoundingBox";
 import {MusicSheetCalculator} from "./MusicSheetCalculator";
 import log from "loglevel";
-//import Dictionary from "typescript-collections/dist/lib/Dictionary"; // unused for now
+//import { Dictionary } from "typescript-collections"; // unused for now
 import {CollectionUtil} from "../../Util/CollectionUtil";
 import {SelectionStartSymbol} from "./SelectionStartSymbol";
 import {SelectionEndSymbol} from "./SelectionEndSymbol";
@@ -180,9 +180,10 @@ export class GraphicalMusicSheet {
         this.calculator.calculate();
     }
 
-    public prepare(): void {
-        this.calculator.prepareGraphicalMusicSheet();
-    }
+    // unused method
+    // public prepare(): void {
+    //     this.calculator.prepareGraphicalMusicSheet();
+    // }
 
     public EnforceRedrawOfMusicSystems(): void {
         for (let idx: number = 0, len: number = this.musicPages.length; idx < len; ++idx) {
@@ -202,6 +203,17 @@ export class GraphicalMusicSheet {
         return undefined;
     }
 
+    public findGraphicalMeasure(measureIndex: number, staffIndex: number): GraphicalMeasure {
+        for (let i: number = measureIndex; i >= 0; i--) {
+            const gMeasure: GraphicalMeasure = this.measureList[i][staffIndex];
+            if (gMeasure) {
+                return gMeasure;
+            }
+            // else look backwards (previous measures). this is only really valid for MultipleRestMeasures of course.
+        }
+        return undefined; // shouldn't happen
+    }
+
     /**
      * Search the MeasureList for a certain GraphicalStaffEntry with the given SourceStaffEntry,
      * at a certain verticalIndex (eg a corresponding Staff), starting at a specific horizontalIndex (eg specific GraphicalMeasure).
@@ -213,6 +225,9 @@ export class GraphicalMusicSheet {
     public findGraphicalStaffEntryFromMeasureList(staffIndex: number, measureIndex: number, sourceStaffEntry: SourceStaffEntry): GraphicalStaffEntry {
         for (let i: number = measureIndex; i < this.measureList.length; i++) {
             const graphicalMeasure: GraphicalMeasure = this.measureList[i][staffIndex];
+            if (!graphicalMeasure) {
+                continue;
+            }
             for (let idx: number = 0, len: number = graphicalMeasure.staffEntries.length; idx < len; ++idx) {
                 const graphicalStaffEntry: GraphicalStaffEntry = graphicalMeasure.staffEntries[idx];
                 if (graphicalStaffEntry.sourceStaffEntry === sourceStaffEntry) {
@@ -452,7 +467,7 @@ export class GraphicalMusicSheet {
      */
     public getGraphicalMeasureFromSourceMeasureAndIndex(sourceMeasure: SourceMeasure, staffIndex: number): GraphicalMeasure {
         for (let i: number = 0; i < this.measureList.length; i++) {
-            if (this.measureList[i][0].parentSourceMeasure === sourceMeasure) {
+            if (this.measureList[i][0]?.parentSourceMeasure === sourceMeasure) {
                 return this.measureList[i][staffIndex];
             }
         }
